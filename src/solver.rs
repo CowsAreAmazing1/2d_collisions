@@ -373,7 +373,6 @@ impl PhysicsSolver {
         self.quadtree.collect_pairs(&mut self.pairs);
         self.solve_collsions();
         self.update_other(dt, window_vel);
-        self.update_other(dt, window_vel);
     }
 
     fn solve_collsions(&mut self) {
@@ -390,7 +389,7 @@ impl PhysicsSolver {
             return;
         }
         
-        let response_coef = 1.0;
+        let response_coef = 0.7;
         let eps = 0.0001;
         let eps_sq = eps * eps;
 
@@ -416,7 +415,7 @@ impl PhysicsSolver {
 
         for obj in &mut self.objects.iter_mut() { 
             obj.add_velocity(window_vel);
-            obj.acceleration -= gravity * self.sub_steps as f32;
+            obj.acceleration -= gravity / *dt;
             obj.update(dt, self.world);
         }
     }

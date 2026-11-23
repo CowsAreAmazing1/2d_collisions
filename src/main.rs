@@ -3,7 +3,7 @@ use nannou::prelude::*;
 use solver::*;
 mod solver;
 
-const DT: f32 = 0.05;
+const DT: f32 = 0.01;
 const RADIUS: f32 = 5.0;
 
 fn main() {
@@ -68,8 +68,8 @@ fn update(app: &App, model: &mut Model, update: Update) {
         // & update.since_last < Duration::from_millis(17) {
         let s = 6.0;
         let pos = vec2(
-            model.solver.world.w() / s,
-            (s - 1.0) * model.solver.world.h() / s,
+            model.solver.world.w() / s * 0.5,
+            (s - 1.0) * model.solver.world.h() / s * 0.5,
         ); // model.solver.world.top_left();
 
         let osc = update.since_start.as_millis() as f32;
