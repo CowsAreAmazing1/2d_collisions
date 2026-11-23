@@ -1,7 +1,3 @@
-
-pub mod solver {
-
-
 use nannou::prelude::*;
 use nannou::color::Hsv;
 
@@ -25,8 +21,6 @@ impl Ball {
         }
     }
 
-    // Construct a ball from a velocity vector and the integration timestep.
-    // Ensures initial motion is consistent regardless of sub-stepping.
     pub fn with_velocity(pos: Vec2, velocity: Vec2, radius: f32, hue: f32, dt: f32) -> Self {
         Ball {
             position: pos,
@@ -46,16 +40,33 @@ impl Ball {
     //     self.last_position = pos;
     // }
 
-    pub fn update(&mut self, dt: &f32) {
+    pub fn update(&mut self, dt: &f32, world: Rect<f32>) {
         let pos_diff = self.position - self.last_position;
-        let velocity_damping: f32 = 0.0;
+        let velocity_damping: f32 = 0.1;
 
         let new_position = self.position + pos_diff + (self.acceleration - pos_diff * velocity_damping) * (dt * dt);
         self.last_position = self.position;
         self.position      = new_position;
         self.acceleration  = Vec2::ZERO;
 
+        let (l, r, b, t) = world.l_r_b_t();
+        if self.position.x > r - self.radius {
+            self.position.x = r - self.radius;
+            self.last_position.x = self.position.x + pos_diff.x;
+        } else if self.position.x < l + self.radius {
+            self.position.x = l + self.radius;
+            self.last_position.x = self.position.x + pos_diff.x;
+        }
+        if self.position.y > t - self.radius {
+            self.position.y = t - self.radius;
+            self.last_position.y = self.position.y + pos_diff.y;
+        } else if self.position.y < b + self.radius {
+            self.position.y = b + self.radius;
+            self.last_position.y = self.position.y + pos_diff.y;
+        }
+
         // self.hue = (self.hue + 0.05) % 360.0;
+        // self.hue = pos_diff.length() * 30.0
     }
 
     // fn stop(&mut self) {
@@ -87,6 +98,19 @@ impl Ball {
     // fn move_ball(&mut self, v: Vec2) {
     //     self.position += v;
     // }
+
+    pub fn draw(&self, draw: &Draw) {
+        let cdraw = draw.xy(self.position);
+        cdraw.ellipse()
+            .color(self.color())
+            .no_fill()
+            .stroke(self.color())
+            .stroke_weight(1.0)
+            .w_h(1.0, 1.0)
+            .radius(self.radius)
+            .resolution(10.0)
+            ;
+    }
 }
 
 #[inline]
@@ -274,9 +298,17 @@ impl QuadTree {
 }
 
 
-pub const QT_MAX_DEPTH: usize = 15;
-pub const QT_MAX_OBJECTS: usize = 1;
+pub const QT_MAX_DEPTH: usize =   10;
+pub const QT_MAX_OBJECTS: usize = 6;
 
+
+//  \   DEPTH | 1
+// OS \
+//   1 |        
+//   2 |        
+//   3 |        
+//   4 |
+//   5 |
 
 
 
@@ -291,9 +323,41 @@ pub struct PhysicsSolver {
 
 impl PhysicsSolver {
     pub fn new(app: &App, gravity_mag: f32, sub_steps: u32) -> Self {
-        let objects: Vec<Ball> = Vec::with_capacity(1000);
-        let (w, h) = app.window_rect().w_h();
-        let world = Rect::from_corners(pt2(0.0, 0.0), pt2(w, h));
+        let objects: Vec<Ball> = Vec::with_capacity(5000);
+        
+        let world = app.window_rect();
+        let quadtree = QuadTree::new(world);
+        let pairs = Vec::with_capacity(QT_MAX_DEPTH * QT_MAX_OBJECTS * QT_MAX_OBJECTS);
+    
+        PhysicsSolver {
+            objects,
+            quadtree,
+            world,
+            gravity: vec2(0.0, gravity_mag),
+            sub_steps,
+            pairs,
+        }
+    }
+
+    pub fn grid(app: &App, gravity_mag: f32, sub_steps: u32, area: Rect, radius: f32) -> Self {
+        let npx = 2*(area.w() / radius).floor() as i32;
+        let npy = 2*(area.h() / radius).floor() as i32;
+
+        let mut objects: Vec<Ball> = (0..npy)
+            .flat_map(|y| {
+                (0..npx).map(move |x| {
+                    let x = map_range(x, 0, npx, area.left(), area.right());
+                    let y = map_range(y, 0, npy, area.bottom(), area.top());
+                    let pos = radius * vec2(x, y);
+                    let hue = (x as f32 + y as f32) / (npx as f32 + npy as f32);
+
+                    Ball::new(pos, vec2(2.0, 0.01 * random_f32()), radius, hue)
+                })
+            })
+            .collect();
+
+        let world = app.window_rect();
+        objects.push(Ball::new(world.bottom_left(), vec2(5.0, 5.0), radius, 180.0));
 
         let quadtree = QuadTree::new(world);
         let pairs = Vec::with_capacity(QT_MAX_DEPTH * QT_MAX_OBJECTS * QT_MAX_OBJECTS);
@@ -324,7 +388,7 @@ impl PhysicsSolver {
 
         self.quadtree.collect_pairs(&mut self.pairs);
         self.solve_collsions();
-        self.update_other(&dt, window_vel);
+        self.update_other(dt, window_vel);
     }
 
     fn solve_collsions(&mut self) {
@@ -334,13 +398,12 @@ impl PhysicsSolver {
         }
     }
 
-    #[inline(always)]
     fn solve_contact(&mut self, b1_ind: usize, b2_ind: usize) { // Single ball on ball collision
         if b1_ind == b2_ind {
             return;
         }
         
-        let response_coef = 1.0;
+        let response_coef = 0.7;
         let eps = 0.0001;
         let eps_sq = eps * eps;
         
@@ -360,29 +423,11 @@ impl PhysicsSolver {
 
     fn update_other(&mut self, dt: &f32, window_vel: Vec2) { // other updates for the full simulation
         let gravity = self.gravity;
-        let world_w = self.world.w();
-        let world_h = self.world.h();
 
-        for (i, obj) in &mut self.objects.iter_mut().enumerate() { 
+        for obj in &mut self.objects.iter_mut() { 
             obj.add_velocity(window_vel);
             obj.acceleration -= gravity * self.sub_steps as f32;
-            obj.update(dt);
-
-            if obj.position.y > world_h - obj.radius {
-                obj.last_position.y = world_h - obj.radius;
-                obj.position.y = world_h - obj.radius; // - obj.position.
-            } else if obj.position.y < obj.radius {
-                obj.last_position.y = obj.radius;
-                obj.position.y = 2.0 * obj.radius - obj.position.y;
-            }
-
-            if obj.position.x > world_w - obj.radius {
-                obj.last_position.x = world_w - obj.radius;
-                obj.position.x = world_w - obj.radius; // - obj.position.x;
-            } else if obj.position.x < obj.radius {
-                obj.last_position.x = obj.radius;
-                obj.position.x = 2.0 * obj.radius - obj.position.x;
-            }
+            obj.update(dt, self.world);
         }
     }
     
@@ -399,6 +444,4 @@ impl PhysicsSolver {
     pub fn add_object(&mut self, obj: Ball) {
         self.objects.push(obj);
     }
-}
-
 }

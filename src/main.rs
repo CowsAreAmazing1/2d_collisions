@@ -1,16 +1,15 @@
 
 use nannou::prelude::*;
 
-use solver::solver::*;
+use solver::*;
 pub mod solver;
 
-const DT: f32 = 0.1;
+const DT: f32 = 0.05;
 const RADIUS: f32 = 5.0;
 
 fn main() {
-    nannou::app(model).update(update).loop_mode(LoopMode::refresh_sync()).run()
+    nannou::app(model).update(update).run() // loopmode
 }
-
 
 struct Model {
     solver: PhysicsSolver,
@@ -18,8 +17,10 @@ struct Model {
     prev_pos: Vec2,
     show_quadtree: bool,
     spawn_objects: bool,
+    paused: bool,
     use_wall_clock_dt: bool,
     mouse_spawner: Option<Vec2>,
+    fpses: Vec<f32>,
 }
 
 fn model(app: &App) -> Model {
@@ -32,29 +33,32 @@ fn model(app: &App) -> Model {
         .build()
         .unwrap();
 
-    let ps = PhysicsSolver::new(app, 0.0, 4);
+    let ps = PhysicsSolver::new(app, 10.0, 8);
 
     Model {
         solver: ps,
         window,
         prev_pos: Vec2::ZERO,
-        show_quadtree: true,
+        show_quadtree: false,
         spawn_objects: false,
+        paused: false,
         use_wall_clock_dt: false,
         mouse_spawner: None,
+        fpses: Vec::new(),
     }
 }
 
 fn update(app: &App, model: &mut Model, update: Update) {
     let window_vel = app.window(model.window).unwrap().outer_position_pixels().unwrap_or_default();
-    let window_vel = vec2(window_vel.0 as f32, window_vel.1 as f32);
+    let window_vel = 0.0 * vec2(window_vel.0 as f32, window_vel.1 as f32);
 
-    model.solver.update(&DT, -0.003 * (model.prev_pos - window_vel));
+    if !model.paused {
+        model.solver.update(&DT, -0.006 * (model.prev_pos - window_vel));
+    }
     model.prev_pos = window_vel;
 
     if model.spawn_objects { // & update.since_last < Duration::from_millis(17) {
-        let s = 6.0;
-        let pos = vec2(model.solver.world.w() / s, (s-1.0) * model.solver.world.h() / s); // model.solver.world.top_left();
+        let pos = vec2(-800.0, 600.0); // model.solver.world.top_left();
 
         let osc = update.since_start.as_millis() as f32;
         
@@ -69,7 +73,7 @@ fn update(app: &App, model: &mut Model, update: Update) {
         let sub_dt = DT / model.solver.sub_steps as f32;
         let hue = osc / 50.0;
         
-        for i in 0..5 {
+        for i in 0..15 {
             let ball_pos = pos + 2.0 * RADIUS * (i-15) as f32 * vec2(-angle.sin(), angle.cos());
             model.solver.add_object(Ball::with_velocity(
                 ball_pos,
@@ -82,8 +86,6 @@ fn update(app: &App, model: &mut Model, update: Update) {
     }
 
     if app.mouse.buttons.left().is_down() {
-        let mid = vec2(app.window_rect().w()/2.0, app.window_rect().h()/2.0);
-
         if let Some(emit_pos) = model.mouse_spawner {
             let o2o1 = app.mouse.position() - emit_pos;
             let dist = o2o1.length();
@@ -99,7 +101,7 @@ fn update(app: &App, model: &mut Model, update: Update) {
             let sub_dt = DT / model.solver.sub_steps as f32;
             
             for i in 0..1 {
-                let ball_pos = mid + emit_pos + 2.0 * RADIUS * (i) as f32 * vec2(-angle.sin(), angle.cos());
+                let ball_pos = emit_pos + 2.0 * RADIUS * (i) as f32 * vec2(-angle.sin(), angle.cos());
                 model.solver.add_object(Ball::with_velocity(
                     ball_pos,
                     velocity,
@@ -117,10 +119,17 @@ fn update(app: &App, model: &mut Model, update: Update) {
     } else {
         model.mouse_spawner = None;
     }
+
+    if app.elapsed_frames().is_multiple_of(10) {
+        let avg = model.fpses.iter().sum::<f32>() / app.elapsed_frames() as f32;
+        println!("{}", avg)
+    }
+    model.fpses.push(app.fps());
+
 }
 
-fn window_resized(_app: &App, model: &mut Model, new_size: Vec2) {
-    model.solver.world = Rect::from_corners(pt2(0.0, 0.0), pt2(new_size.x, new_size.y));
+fn window_resized(app: &App, model: &mut Model, _new_size: Vec2) {
+    model.solver.world = app.window_rect();
     model.solver.refresh_quadtree();
 }
 
@@ -142,8 +151,7 @@ fn draw_quadtree(draw: &Draw, node: &QuadTreeNode) {
 
 fn view(app: &App, model: &Model, frame: Frame) {
     // println!("{}", 4.0f32.powi(QT_MAX_DEPTH as i32) * model.solver.quadtree.average_objects_per_node());
-    let (w, h) = app.window_rect().w_h();
-    let draw = app.draw().x_y(-w/2.0, -h/2.0);
+    let draw = app.draw(); // .xy(-0.5 * app.window_rect().wh());
     draw.background().color(BLACK);
 
     if model.show_quadtree {
@@ -151,20 +159,11 @@ fn view(app: &App, model: &Model, frame: Frame) {
     }
 
     for obj in &model.solver.objects {
-        let cdraw = draw.xy(obj.position);
-        cdraw.ellipse()
-            .color(obj.color())
-            .no_fill()
-            .stroke(obj.color())
-            .stroke_weight(1.0)
-            .w_h(1.0, 1.0)
-            .radius(obj.radius)
-            .resolution(4.0)
-            ;
+        obj.draw(&draw);
     }
 
     draw.text(model.solver.objects.len().to_string().as_str())
-        .xy(vec2(500.0,500.0))
+        .xy(vec2(-100.0,0.0))
         .color(WHITE)
         .font_size(24);
 
@@ -187,6 +186,9 @@ fn key_pressed(_app: &App, model: &mut Model, key: Key) {
         }
         Key::T => {
             model.use_wall_clock_dt = !model.use_wall_clock_dt;
+        }
+        Key::P => {
+            model.paused = !model.paused;
         }
         _other_key => {}
     }
